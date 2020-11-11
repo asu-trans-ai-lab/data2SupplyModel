@@ -19,14 +19,13 @@ pd.set_option('display.max_rows', 500)
 # In[1] Set parameters
 TIM_STAMP=15
 
-WEIGHT_CAP_DROP=1
-WEIGHT_REASON_JAM=100
+
 REASON_JAM=220 # The upper bound of density 
 SPD_CAP=1 # speed based period capacity
 METHOD="QBM" # volume based method, VBM; density based method, DBM, and queue based method QBM, or BPR_X
 OUTPUT="DAY" # DAY, or PERIOD
 INCOMP_SAMPLE=0.5 # if the incomplete of the records larger than the threshold, we will give up the link's data during a time-period
-FILE=1
+FILE=1 # write log file or not
 
 weight_hourly_data=1
 weight_period_data=1
@@ -420,7 +419,7 @@ def calculate_congestion_period(speed_15min,volume_15min,CUT_OFF_SPD,ULT_CAP):
                 t3=i-1
                 break
         for j in range(min_index,-1,-1):
-            #t0=PSTW_st
+            #pyinstaller --onefile hello.pyt0=PSTW_st
             if speed_15min[j]>CUT_OFF_SPD:               
                 t0=j+1
                 break
