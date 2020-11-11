@@ -41,17 +41,32 @@ g_parameter_list=[]
 g_vdf_group_list=[]
 
 # In[2] Upper bound and lower bound setting
-def max_cong_period(period):
+def max_cong_period(period,vdf_name):
     if period == "1400_1800":
-        return 4
+        if (vdf_name[0]==1)|(vdf_name[0]==0):
+            return 4
+        else:
+            return 4
     if period == "0600_0900":
-        return 3      
+        if (vdf_name[0]==1)|(vdf_name[0]==0):
+            return 3
+        else: 
+            return 3      
     if period == "0900_1400":
-        return 4
+        if (vdf_name[0]==1)|(vdf_name[0]==0):
+            return 4
+        else: 
+            return 5
     if period == "1800_0600":
-        return 4
+        if (vdf_name[0]==1)|(vdf_name[0]==0):
+            return 4
+        else: 
+            return 12
     if period == "Day":
-        return 4
+        if (vdf_name[0]==1)|(vdf_name[0]==0):
+            return 3
+        else: 
+            return 12
 
 # In[3] input data
 def input_data():
@@ -101,9 +116,11 @@ def calibrate_traffic_flow(training_set,vdf_name):
     Y_data=[]
     for k in range(0,len(training_set_1),10):
         Y_data.append(training_set_1.loc[k:k+10,'speed'].mean())
-        threshold=training_set_1.loc[k:k+10,'density'].quantile(0.9) # setting threshold for density
-        intern_training_set_1=training_set_1[k:k+10]
-        X_data.append(intern_training_set_1[(intern_training_set_1['density']>=threshold)]['density'].mean())
+        #threshold=training_set_1.loc[k:k+10,'density'].quantile(0.9) # setting threshold for density
+        threshord_vol=training_set_1.loc[k:k+10,'volume_hourly'].quantile(0.99)
+        intern_training_set_1=training_set_1.loc[k:k+10]
+        #X_data.append(intern_training_set_1[(intern_training_set_1['density']>=threshold)]['density'].mean())
+        X_data.append(intern_training_set_1[(intern_training_set_1['volume_hourly']>=threshord_vol)]['density'].mean())
     x = np.array(X_data)
     y = np.array(Y_data)
 
@@ -112,26 +129,26 @@ def calibrate_traffic_flow(training_set,vdf_name):
     xvals=np.sort(x)
     plt.plot(training_set_1['density'], training_set_1['speed'], '*', c='k', label='original values',markersize=1)
     plt.plot(xvals, dens_spd_func(xvals, *popt), '--',c='r',markersize=6)
-    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name))
+    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name[1]*100+vdf_name[0]))
     plt.xlabel('density (vpmpl)')
     plt.ylabel('speed (mph)')
-    plt.savefig('./1_FD_speed_density_'+str(vdf_name)+'.png')    
+    plt.savefig('./1_FD_speed_density_'+str(vdf_name[1]*100+vdf_name[0])+'.png')    
     plt.close() 
     
     plt.plot(training_set_1['volume_hourly'], training_set_1['speed'], '*', c='k', label='original values',markersize=1)
     plt.plot(xvals*dens_spd_func(xvals, *popt),dens_spd_func(xvals, *popt), '--',c='r',markersize=6)
-    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name))
+    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name[1]*100+vdf_name[0]))
     plt.xlabel('volume (vphpl)')
     plt.ylabel('speed (mph)')
-    plt.savefig('./1_FD_speed_volume_'+str(vdf_name)+'.png')    
+    plt.savefig('./1_FD_speed_volume_'+str(vdf_name[1]*100+vdf_name[0])+'.png')    
     plt.close() 
 
     plt.plot(training_set_1['density'], training_set_1['volume_hourly'], '*', c='k', label='original values',markersize=1)
     plt.plot(xvals,xvals*dens_spd_func(xvals, *popt), '--',c='r',markersize=6)
-    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name))
+    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name[1]*100+vdf_name[0]))
     plt.xlabel('density (vpmpl)')
     plt.ylabel('volume (vphpl)')
-    plt.savefig('./1_FD_volume_density_'+str(vdf_name)+'.png')    
+    plt.savefig('./1_FD_volume_density_'+str(vdf_name[1]*100+vdf_name[0])+'.png')    
     plt.close() 
 
     FFS=popt[0]
@@ -173,7 +190,7 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
                 X_data.append(internal_vdf_dlink_df['VOC'].mean())
             for kk in range(weight_max_cong_period):
                 Y_data.append(0.001)
-                X_data.append(max_cong_period(period_name))
+                X_data.append(max_cong_period(period_name,vdf_name))
 
 
         x = np.array(X_data)
@@ -189,11 +206,11 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
         plt.plot(xvals,bpr_func(xvals, *popt_VBM), '--',c='r',markersize=6)
         plt.plot(volume_speed_func(xvals,*popt_VBM,*popt_1)/ULT_CAP,bpr_func(xvals, *popt_VBM),c='b')
         VBM_PE=np.mean(np.abs((bpr_func(x, *popt_VBM)-y)/y))
-        print('VBM,'+str(vdf_name)+' '+str(period_name)+',RMSE='+str(round(VBM_RMSE,2))+' RSE='+str(round(VBM_RSE,2)))
-        plt.title('VBM,'+str(vdf_name)+' '+str(period_name)+',RSE='+str(round(VBM_RSE,3))+'% ,ffs='+str(round(popt_VBM[0],2))+',alpha='+str(round(popt_VBM[1],2))+',beta='+str(round(popt_VBM[2],2)))
+        print('VBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RMSE='+str(round(VBM_RMSE,2))+' RSE='+str(round(VBM_RSE,2)))
+        plt.title('VBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RSE='+str(round(VBM_RSE,3))+'% ,ffs='+str(round(popt_VBM[0],2))+',alpha='+str(round(popt_VBM[1],2))+',beta='+str(round(popt_VBM[2],2)))
         plt.xlabel('VOC')
         plt.ylabel('speed (mph)')
-        plt.savefig('./2_VDF_VBM_'+str(vdf_name)+'_'+str(period_name)+'.png')    
+        plt.savefig('./2_VDF_VBM_'+str(vdf_name[1]*100+vdf_name[0])+'_'+str(period_name)+'.png')    
         plt.close() 
         internal_vdf_dlink_df['alpha']=round(popt_VBM[1],2)
         internal_vdf_dlink_df['beta']=round(popt_VBM[2],2)
@@ -215,7 +232,7 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
                 X_data.append(internal_vdf_dlink_df['VOC_period'].mean())
             for kk in range(weight_max_cong_period):
                 Y_data.append(0.001)
-                X_data.append(max_cong_period(period_name))
+                X_data.append(max_cong_period(period_name,vdf_name))
 
 
         x = np.array(X_data)
@@ -230,11 +247,11 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
         plt.plot(xvals,bpr_func(xvals, *popt_DBM), '--',c='r',markersize=6)
         plt.plot(volume_speed_func(xvals,*popt_DBM,*popt_1)/ULT_CAP,bpr_func(xvals, *popt_DBM),c='b')
         DBM_PE=np.mean(np.abs((bpr_func(x, *popt_DBM)-y)/y))
-        print('DBM,'+str(vdf_name)+' '+str(period_name)+',RMSE='+str(round(DBM_RMSE,2))+' RSE='+str(round(DBM_RSE,2)))
-        plt.title('DBM,'+str(vdf_name)+' '+str(period_name)+',RSE='+str(round(DBM_RSE,2)) +'% ,ffs='+str(round(popt_DBM[0],2))+',alpha='+str(round(popt_DBM[1],2))+',beta='+str(round(popt_DBM[2],2)))
+        print('DBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RMSE='+str(round(DBM_RMSE,2))+' RSE='+str(round(DBM_RSE,2)))
+        plt.title('DBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RSE='+str(round(DBM_RSE,2)) +'% ,ffs='+str(round(popt_DBM[0],2))+',alpha='+str(round(popt_DBM[1],2))+',beta='+str(round(popt_DBM[2],2)))
         plt.xlabel('VOC')
         plt.ylabel('speed (mph)')
-        plt.savefig('./2_VDF_DBM_'+str(vdf_name)+'_'+str(period_name)+'.png')    
+        plt.savefig('./2_VDF_DBM_'+str(vdf_name[1]*100+vdf_name[0])+'_'+str(period_name)+'.png')    
         plt.close() 
         internal_vdf_dlink_df['alpha']=round(popt_DBM[1],2)
         internal_vdf_dlink_df['beta']=round(popt_DBM[2],2)   
@@ -258,7 +275,7 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
                 X_data.append(internal_vdf_dlink_df['VOC_period'].mean())
             for kk in range(weight_max_cong_period):
                 Y_data.append(0.001)
-                X_data.append(max_cong_period(period_name))
+                X_data.append(max_cong_period(period_name,vdf_name))
 
 
         x = np.array(X_data)
@@ -273,11 +290,11 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
         plt.plot(volume_speed_func(xvals,*popt_QBM,*popt_1)/ULT_CAP,bpr_func(xvals, *popt_QBM),c='b')
         
         QBM_PE=np.mean(np.abs((bpr_func(x, *popt_QBM)-y)/y))
-        print('QBM,'+str(vdf_name)+' '+str(period_name)+',RMSE='+str(round(QBM_RMSE,2))+' RSE='+str(round(QBM_RSE,2)))
-        plt.title('QBM,'+str(vdf_name)+' '+str(period_name)+',RSE='+str(round(QBM_RSE,2))+'%,ffs='+str(round(popt_QBM[0],2))+',alpha='+str(round(popt_QBM[1],2))+',beta='+str(round(popt_QBM[2],2)))
+        print('QBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RMSE='+str(round(QBM_RMSE,2))+' RSE='+str(round(QBM_RSE,2)))
+        plt.title('QBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RSE='+str(round(QBM_RSE,2))+'%,ffs='+str(round(popt_QBM[0],2))+',alpha='+str(round(popt_QBM[1],2))+',beta='+str(round(popt_QBM[2],2)))
         plt.xlabel('VOC')
         plt.ylabel('speed (mph)')
-        plt.savefig('./2_VDF_QBM_'+str(vdf_name)+'_'+str(period_name)+'.png')    
+        plt.savefig('./2_VDF_QBM_'+str(vdf_name[1]*100+vdf_name[0])+'_'+str(period_name)+'.png')    
         plt.close() 
         internal_vdf_dlink_df['alpha']=round(popt_QBM[1],2)
         internal_vdf_dlink_df['beta']=round(popt_QBM[2],2)   
@@ -300,7 +317,7 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
                 X_data.append(internal_vdf_dlink_df['VOC_period'].mean())
             for kk in range(weight_max_cong_period):
                 Y_data.append(0.001)
-                X_data.append(max_cong_period(period_name))
+                X_data.append(max_cong_period(period_name,vdf_name))
 
         x = np.array(X_data)
         y = np.array(Y_data)
@@ -314,11 +331,11 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
         plt.plot(volume_speed_func(xvals,*popt_BPR_X,*popt_1)/ULT_CAP,bpr_func(xvals, *popt_BPR_X),c='b')
         
         BPR_X_PE=np.mean(np.abs((bpr_func(x, *popt_BPR_X)-y)/y))
-        print('BPR_X,'+str(vdf_name)+' '+str(period_name)+',RMSE='+str(round(BPR_X_RMSE,2))+' RSE='+str(round(BPR_X_RSE,2)))
-        plt.title('BPR_X,'+str(vdf_name)+' '+str(period_name)+',RSE='+str(round(BPR_X_RSE,2))+'%,ffs='+str(round(popt_BPR_X[0],2))+',alpha='+str(round(popt_BPR_X[1],2))+',beta='+str(round(popt_BPR_X[2],2)))
+        print('BPR_X,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RMSE='+str(round(BPR_X_RMSE,2))+' RSE='+str(round(BPR_X_RSE,2)))
+        plt.title('BPR_X,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RSE='+str(round(BPR_X_RSE,2))+'%,ffs='+str(round(popt_BPR_X[0],2))+',alpha='+str(round(popt_BPR_X[1],2))+',beta='+str(round(popt_BPR_X[2],2)))
         plt.xlabel('VOC')
         plt.ylabel('speed (mph)')
-        plt.savefig('./2_VDF_BPR_X '+str(vdf_name)+'_'+str(period_name)+'.png')    
+        plt.savefig('./2_VDF_BPR_X '+str(vdf_name[1]*100+vdf_name[0])+'_'+str(period_name)+'.png')    
         plt.close() 
         internal_vdf_dlink_df['alpha']=round(popt_BPR_X[1],2)
         internal_vdf_dlink_df['beta']=round(popt_BPR_X[2],2)   
@@ -348,7 +365,7 @@ def vdf_calculation_daily(temp_daily_df,vdf_name,CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,m
             X_data.append(temp_daily_df['VOC_period'].mean())
         for kk in range(weight_max_cong_period):
             Y_data.append(0.001)
-            X_data.append(max_cong_period("Day"))
+            X_data.append(max_cong_period("Day",vdf_name))
         x = np.array(X_data)
         y = np.array(Y_data)
 
@@ -362,11 +379,11 @@ def vdf_calculation_daily(temp_daily_df,vdf_name,CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,m
     plt.plot(volume_speed_func(xvals,*popt_daily,*popt_1)/ULT_CAP,bpr_func(xvals, *popt_daily),c='b')
         
     daily_PE=np.mean(np.abs((bpr_func(x, *popt_daily)-y)/y))
-    print('Daily_'+METHOD+','+str(vdf_name)+',RMSE='+str(round(daily_RMSE,2))+'RSE='+str(round(daily_RSE,2)))
-    plt.title('Daily_'+METHOD+','+str(vdf_name)+',RSE='+str(round(daily_RSE,2))+'%,ffs='+str(round(popt_daily[0],2))+',alpha='+str(round(popt_daily[1],2))+',beta='+str(round(popt_daily[2],2)))
+    print('Daily_'+METHOD+','+str(vdf_name[1]*100+vdf_name[0])+',RMSE='+str(round(daily_RMSE,2))+'RSE='+str(round(daily_RSE,2)))
+    plt.title('Daily_'+METHOD+','+str(vdf_name[1]*100+vdf_name[0])+',RSE='+str(round(daily_RSE,2))+'%,ffs='+str(round(popt_daily[0],2))+',alpha='+str(round(popt_daily[1],2))+',beta='+str(round(popt_daily[2],2)))
     plt.xlabel('VOC')
     plt.ylabel('speed (mph)')
-    plt.savefig('./2_VDF_'+METHOD+'_'+str(vdf_name)+'_day.png')    
+    plt.savefig('./2_VDF_'+METHOD+'_'+str(vdf_name[1]*100+vdf_name[0])+'_day.png')    
     plt.close()
     alpha_dict[temp_daily_df.VDF_TYPE.unique()[0]]=round(popt_daily[1],2)
     beta_dict[temp_daily_df.VDF_TYPE.unique()[0]]=round(popt_daily[2],2)
@@ -403,7 +420,10 @@ def calculate_congestion_period(speed_15min,volume_15min,CUT_OFF_SPD,ULT_CAP):
                 t3=i-1
                 break
         for j in range(min_index,-1,-1):
-            t0=PSTW_st
+            #t0=PSTW_st
+            if speed_15min[j]>CUT_OFF_SPD:               
+                t0=j+1
+                break
     elif min_speed >CUT_OFF_SPD:
         t0=0
         t3=0
@@ -420,7 +440,7 @@ def calculate_congestion_period(speed_15min,volume_15min,CUT_OFF_SPD,ULT_CAP):
 
     return t0, t3,congestion_period,PSTW_st,PSTW_ed,PSTW,Demand,Mu,speed_period
 
-# In[10] Validations
+# In[10] Validation
 def validation(ffs,alpha,beta,K_CRI,mm,volume,capacity):
     u_assign=ffs/(1+alpha*np.power(volume/capacity,beta))
     A=np.power(np.power(ffs/u_assign,mm),0.5)
