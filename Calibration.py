@@ -11,27 +11,9 @@ import heapq
 from sklearn.linear_model import LinearRegression
 from scipy.optimize import curve_fit
 import random 
-
 pd.set_option('display.max_columns', 500)
 pd.set_option('display.max_rows', 500)
-
-
-# In[1] Set parameters
-TIM_STAMP=15
-
-
-REASON_JAM=220 # The upper bound of density 
-SPD_CAP=1 # speed based period capacity
-METHOD="QBM" # volume based method, VBM; density based method, DBM, and queue based method QBM, or BPR_X
-OUTPUT="DAY" # DAY, or PERIOD
-INCOMP_SAMPLE=0.5 # if the incomplete of the records larger than the threshold, we will give up the link's data during a time-period
-FILE=1 # write log file or not
-
-weight_hourly_data=1
-weight_period_data=1
-weight_max_cong_period=100
-
-
+import csv
 
 g_number_of_plink=0
 g_plink_id_dict={}
@@ -40,45 +22,34 @@ g_parameter_list=[]
 g_vdf_group_list=[]
 
 # In[2] Upper bound and lower bound setting
-def max_cong_period(period,vdf_name):
-    if period == "1400_1800":
-        if (vdf_name[0]==1)|(vdf_name[0]==0):
-            return 4
-        else:
-            return 4
-    if period == "0600_0900":
-        if (vdf_name[0]==1)|(vdf_name[0]==0):
-            return 3
-        else: 
-            return 3      
-    if period == "0900_1400":
-        if (vdf_name[0]==1)|(vdf_name[0]==0):
-            return 4
-        else: 
-            return 5
-    if period == "1800_0600":
-        if (vdf_name[0]==1)|(vdf_name[0]==0):
-            return 4
-        else: 
-            return 12
+def max_cong_period(period, vdf_name, ASSIGNMENT_PERIOD, UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH):
+    nb_period=len(ASSIGNMENT_PERIOD)
+    for i in range(nb_period):
+        if period == ASSIGNMENT_PERIOD[i]:
+            if vdf_name[0] == 1:
+                return UPPER_BOUND_DOC_RATIO[i]
+            else:
+                return PERIOD_LENGTH[i]        
     if period == "Day":
-        if (vdf_name[0]==1)|(vdf_name[0]==0):
-            return 3
-        else: 
-            return 12
+        if vdf_name[0] == 1:
+            return np.median(UPPER_BOUND_DOC_RATIO)
+        else:
+            return np.max(PERIOD_LENGTH)
 
 # In[3] input data
 def input_data():
     data_df=pd.read_csv('./link_performance.csv',encoding='UTF-8')
     data_df =data_df.drop(data_df[(data_df.volume == 0) | (data_df.speed == 0)].index) # delete the records speed=0
-    data_df['volume_pl']=data_df['volume']/data_df['lanes']
+    #data_df['volume_pl']=data_df['volume']/data_df['lanes']
 
     # Filtering 
+    data_df=data_df[(data_df['FT']==0)|(data_df['FT']==1)|(data_df['FT']==6)]
+    #data_df=data_df[(data_df['AT']==1) | (data_df['AT']==2)| (data_df['AT']==3)]
     #data_df=data_df[(data_df['assignment_period']=='1400_1800') ]
     data_df.reset_index(drop=True, inplace=True)
 
     # Calculate hourly vol and density
-    data_df['volume_hourly']=data_df['volume_pl']*4
+    data_df['volume_hourly']=data_df['volume_pl']*(60/TIME_INTERVAL_IN_MIN)
     data_df['density']=data_df['volume_hourly']/data_df['speed']
 
     return data_df
@@ -115,39 +86,44 @@ def calibrate_traffic_flow(training_set,vdf_name):
     Y_data=[]
     for k in range(0,len(training_set_1),10):
         Y_data.append(training_set_1.loc[k:k+10,'speed'].mean())
-        #threshold=training_set_1.loc[k:k+10,'density'].quantile(0.9) # setting threshold for density
-        threshord_vol=training_set_1.loc[k:k+10,'volume_hourly'].quantile(0.99)
+        if vdf_name[0]==6: 
+            threshold=training_set_1.loc[k:k+10,'density'].quantile(0.95) # setting threshold for density
+            #threshord_vol=training_set_1.loc[k:k+10,'volume_hourly'].quantile(0.99)
+        else:
+            threshold=training_set_1.loc[k:k+10,'density'].quantile(0.9) # setting threshold for density
+            #threshord_vol=training_set_1.loc[k:k+10,'volume_hourly'].quantile(0.99)
+        #intern_training_set_1=training_set_1[k:k+10]
         intern_training_set_1=training_set_1.loc[k:k+10]
-        #X_data.append(intern_training_set_1[(intern_training_set_1['density']>=threshold)]['density'].mean())
-        X_data.append(intern_training_set_1[(intern_training_set_1['volume_hourly']>=threshord_vol)]['density'].mean())
+        X_data.append(intern_training_set_1[(intern_training_set_1['density']>=threshold)]['density'].mean())
+        #X_data.append(intern_training_set_1[(intern_training_set_1['volume_hourly']>=threshord_vol)]['density'].mean())
     x = np.array(X_data)
     y = np.array(Y_data)
 
-    popt,pcov = curve_fit(dens_spd_func, x, y,bounds=[[lower_bound_FFS,0,0],[upper_bound_FFS,REASON_JAM,10]])
+    popt,pcov = curve_fit(dens_spd_func, x, y,bounds=[[lower_bound_FFS,0,0],[upper_bound_FFS,UPPER_BOUND_JAM_DENSITY,10]])
 
     xvals=np.sort(x)
     plt.plot(training_set_1['density'], training_set_1['speed'], '*', c='k', label='original values',markersize=1)
     plt.plot(xvals, dens_spd_func(xvals, *popt), '--',c='r',markersize=6)
-    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name[1]*100+vdf_name[0]))
+    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name[0]+vdf_name[1]*100))
     plt.xlabel('density (vpmpl)')
     plt.ylabel('speed (mph)')
-    plt.savefig('./1_FD_speed_density_'+str(vdf_name[1]*100+vdf_name[0])+'.png')    
+    plt.savefig('./1_FD_speed_density_'+str(vdf_name[0]+vdf_name[1]*100)+'.png')    
     plt.close() 
     
     plt.plot(training_set_1['volume_hourly'], training_set_1['speed'], '*', c='k', label='original values',markersize=1)
     plt.plot(xvals*dens_spd_func(xvals, *popt),dens_spd_func(xvals, *popt), '--',c='r',markersize=6)
-    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name[1]*100+vdf_name[0]))
+    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name[0]+vdf_name[1]*100))
     plt.xlabel('volume (vphpl)')
     plt.ylabel('speed (mph)')
-    plt.savefig('./1_FD_speed_volume_'+str(vdf_name[1]*100+vdf_name[0])+'.png')    
+    plt.savefig('./1_FD_speed_volume_'+str(vdf_name[0]+vdf_name[1]*100)+'.png')    
     plt.close() 
 
     plt.plot(training_set_1['density'], training_set_1['volume_hourly'], '*', c='k', label='original values',markersize=1)
     plt.plot(xvals,xvals*dens_spd_func(xvals, *popt), '--',c='r',markersize=6)
-    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name[1]*100+vdf_name[0]))
+    plt.title('Traffic flow function fitting,VDF: '+str(vdf_name[0]+vdf_name[1]*100))
     plt.xlabel('density (vpmpl)')
     plt.ylabel('volume (vphpl)')
-    plt.savefig('./1_FD_volume_density_'+str(vdf_name[1]*100+vdf_name[0])+'.png')    
+    plt.savefig('./1_FD_volume_density_'+str(vdf_name[0]+vdf_name[1]*100)+'.png')    
     plt.close() 
 
     FFS=popt[0]
@@ -163,15 +139,16 @@ def calibrate_traffic_flow(training_set,vdf_name):
     return CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,mm
 
 # In[8] VDF calibration 
-def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,mm,peak_factor_avg):
-    
+#def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,mm,peak_factor_avg):
+def vdf_calculation(internal_vdf_dlink_df, vdf_name, period_name, CUT_OFF_SPD, ULT_CAP, K_CRI, FFS, mm,
+                    peak_factor_avg, ASSIGNMENT_PERIOD, UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH):   
     internal_vdf_dlink_df['VOC_period']=internal_vdf_dlink_df['vol_period'].mean()/(ULT_CAP*peak_factor_avg)
     p0=np.array([FFS,0.15,4])
     lowerbound_fitting=[FFS,0.15,1.01] # upper bound and lower bound of free flow speed, alpha and beta
     upperbound_fitting=[FFS*1.1,10,10]
 
     popt_1=np.array([K_CRI,mm])
-    if METHOD =='VBM':
+    if DOC_RATIO_METHOD =='VBM':
         print('Volume method calibration...')
         internal_vdf_dlink_df['VOC']=internal_vdf_dlink_df.apply(lambda x: (ULT_CAP+(ULT_CAP-x.vol_period_hourly))/ULT_CAP if x.speed_period<CUT_OFF_SPD else x.vol_period_hourly/ULT_CAP,axis=1)
 
@@ -180,16 +157,17 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
 
         for k in range(0,len(internal_vdf_dlink_df)):
             # Hourly VOC data 
-            for kk in range(weight_hourly_data):
+            for kk in range(WEIGHT_HOURLY_DATA):
                 Y_data.append(internal_vdf_dlink_df.loc[k,'speed_period'])
                 X_data.append(internal_vdf_dlink_df.loc[k,'VOC'])
             # Period VOC data
-            for kk in range(weight_period_data):
+            for kk in range(WEIGHT_PERIOD_DATA):
                 Y_data.append(internal_vdf_dlink_df['speed_period'].mean())
-                X_data.append(internal_vdf_dlink_df['VOC'].mean())
-            for kk in range(weight_max_cong_period):
+                X_data.append(internal_vdf_dlink_df['VOC_period'].mean())
+            for kk in range(WEIGHT_UPPER_BOUND_DOC_RATIO):
                 Y_data.append(0.001)
-                X_data.append(max_cong_period(period_name,vdf_name))
+                X_data.append(
+                    max_cong_period(period_name, vdf_name, ASSIGNMENT_PERIOD, UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH))
 
 
         x = np.array(X_data)
@@ -205,33 +183,33 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
         plt.plot(xvals,bpr_func(xvals, *popt_VBM), '--',c='r',markersize=6)
         plt.plot(volume_speed_func(xvals,*popt_VBM,*popt_1)/ULT_CAP,bpr_func(xvals, *popt_VBM),c='b')
         VBM_PE=np.mean(np.abs((bpr_func(x, *popt_VBM)-y)/y))
-        print('VBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RMSE='+str(round(VBM_RMSE,2))+' RSE='+str(round(VBM_RSE,2)))
-        plt.title('VBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RSE='+str(round(VBM_RSE,3))+'% ,ffs='+str(round(popt_VBM[0],2))+',alpha='+str(round(popt_VBM[1],2))+',beta='+str(round(popt_VBM[2],2)))
+        #print('VBM,'+str(vdf_name)+' '+str(period_name)+',RMSE='+str(round(VBM_RMSE,2))+'RSE='+str(round(VBM_RSE,2)))
+        plt.title('VBM,'+str(vdf_name[0]+vdf_name[1]*100)+' '+str(period_name)+',RSE='+str(round(VBM_RSE,3))+'% ,ffs='+str(round(popt_VBM[0],2))+',alpha='+str(round(popt_VBM[1],2))+',beta='+str(round(popt_VBM[2],2)))
         plt.xlabel('VOC')
         plt.ylabel('speed (mph)')
-        plt.savefig('./2_VDF_VBM_'+str(vdf_name[1]*100+vdf_name[0])+'_'+str(period_name)+'.png')    
+        plt.savefig('./2_VDF_VBM_'+str(vdf_name[0]+vdf_name[1]*100)+'_'+str(period_name)+'.png')    
         plt.close() 
         internal_vdf_dlink_df['alpha']=round(popt_VBM[1],2)
         internal_vdf_dlink_df['beta']=round(popt_VBM[2],2)
         
     #-------------------------------------
-    if METHOD =='DBM':
+    if DOC_RATIO_METHOD =='DBM':
         print('Density method calibration...')
         internal_vdf_dlink_df['VOC']=internal_vdf_dlink_df.apply(lambda x: x.density_period/K_CRI,axis=1)
         X_data=[]
         Y_data=[]
         for k in range(0,len(internal_vdf_dlink_df)):
             # Hourly VOC data 
-            for kk in range(weight_hourly_data):
+            for kk in range(WEIGHT_HOURLY_DATA):
                 Y_data.append(internal_vdf_dlink_df.loc[k,'speed_period'])
                 X_data.append(internal_vdf_dlink_df.loc[k,'VOC'])
             # Period VOC data
-            for kk in range(weight_period_data):
+            for kk in range(WEIGHT_PERIOD_DATA):
                 Y_data.append(internal_vdf_dlink_df['speed_period'].mean())
                 X_data.append(internal_vdf_dlink_df['VOC_period'].mean())
-            for kk in range(weight_max_cong_period):
+            for kk in range(WEIGHT_UPPER_BOUND_DOC_RATIO):
                 Y_data.append(0.001)
-                X_data.append(max_cong_period(period_name,vdf_name))
+                X_data.append(max_cong_period(period_name, vdf_name, ASSIGNMENT_PERIOD, UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH))
 
 
         x = np.array(X_data)
@@ -246,17 +224,17 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
         plt.plot(xvals,bpr_func(xvals, *popt_DBM), '--',c='r',markersize=6)
         plt.plot(volume_speed_func(xvals,*popt_DBM,*popt_1)/ULT_CAP,bpr_func(xvals, *popt_DBM),c='b')
         DBM_PE=np.mean(np.abs((bpr_func(x, *popt_DBM)-y)/y))
-        print('DBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RMSE='+str(round(DBM_RMSE,2))+' RSE='+str(round(DBM_RSE,2)))
-        plt.title('DBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RSE='+str(round(DBM_RSE,2)) +'% ,ffs='+str(round(popt_DBM[0],2))+',alpha='+str(round(popt_DBM[1],2))+',beta='+str(round(popt_DBM[2],2)))
+        #print('DBM,'+str(vdf_name)+' '+str(period_name)+',RMSE='+str(round(DBM_RMSE,2))+'RSE='+str(round(DBM_RSE,2)))
+        plt.title('DBM,'+str(vdf_name[0]+vdf_name[1]*100)+' '+str(period_name)+',RSE='+str(round(DBM_RSE,2)) +'% ,ffs='+str(round(popt_DBM[0],2))+',alpha='+str(round(popt_DBM[1],2))+',beta='+str(round(popt_DBM[2],2)))
         plt.xlabel('VOC')
         plt.ylabel('speed (mph)')
-        plt.savefig('./2_VDF_DBM_'+str(vdf_name[1]*100+vdf_name[0])+'_'+str(period_name)+'.png')    
+        plt.savefig('./2_VDF_DBM_'+str(vdf_name[0]+vdf_name[1]*100)+'_'+str(period_name)+'.png')    
         plt.close() 
         internal_vdf_dlink_df['alpha']=round(popt_DBM[1],2)
         internal_vdf_dlink_df['beta']=round(popt_DBM[2],2)   
 
 
-    if METHOD =='QBM':
+    if DOC_RATIO_METHOD =='QBM':
         print('Queue based method method calibration...')
         internal_vdf_dlink_df['VOC']=internal_vdf_dlink_df.apply(lambda x: x.Demand/ULT_CAP,axis=1)
 
@@ -265,16 +243,16 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
         Y_data=[]
         for k in range(0,len(internal_vdf_dlink_df)):
             # Hourly VOC data 
-            for kk in range(weight_hourly_data):
+            for kk in range(WEIGHT_HOURLY_DATA):
                 Y_data.append(internal_vdf_dlink_df.loc[k,'speed_period'])
                 X_data.append(internal_vdf_dlink_df.loc[k,'VOC'])
             # Period VOC data
-            for kk in range(weight_period_data):
+            for kk in range(WEIGHT_PERIOD_DATA):
                 Y_data.append(internal_vdf_dlink_df['speed_period'].mean())
                 X_data.append(internal_vdf_dlink_df['VOC_period'].mean())
-            for kk in range(weight_max_cong_period):
+            for kk in range(WEIGHT_UPPER_BOUND_DOC_RATIO):
                 Y_data.append(0.001)
-                X_data.append(max_cong_period(period_name,vdf_name))
+                X_data.append(max_cong_period(period_name, vdf_name, ASSIGNMENT_PERIOD, UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH))
 
 
         x = np.array(X_data)
@@ -289,17 +267,17 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
         plt.plot(volume_speed_func(xvals,*popt_QBM,*popt_1)/ULT_CAP,bpr_func(xvals, *popt_QBM),c='b')
         
         QBM_PE=np.mean(np.abs((bpr_func(x, *popt_QBM)-y)/y))
-        print('QBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RMSE='+str(round(QBM_RMSE,2))+' RSE='+str(round(QBM_RSE,2)))
-        plt.title('QBM,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RSE='+str(round(QBM_RSE,2))+'%,ffs='+str(round(popt_QBM[0],2))+',alpha='+str(round(popt_QBM[1],2))+',beta='+str(round(popt_QBM[2],2)))
+        #print('QBM,'+str(vdf_name)+' '+str(period_name)+',RMSE='+str(round(QBM_RMSE,2))+'RSE='+str(round(QBM_RSE,2)))
+        plt.title('QBM,'+str(vdf_name[0]+vdf_name[1]*100)+' '+str(period_name)+',RSE='+str(round(QBM_RSE,2))+'%,ffs='+str(round(popt_QBM[0],2))+',alpha='+str(round(popt_QBM[1],2))+',beta='+str(round(popt_QBM[2],2)))
         plt.xlabel('VOC')
         plt.ylabel('speed (mph)')
-        plt.savefig('./2_VDF_QBM_'+str(vdf_name[1]*100+vdf_name[0])+'_'+str(period_name)+'.png')    
+        plt.savefig('./2_VDF_QBM_'+str(vdf_name[0]+vdf_name[1]*100)+'_'+str(period_name)+'.png')    
         plt.close() 
         internal_vdf_dlink_df['alpha']=round(popt_QBM[1],2)
         internal_vdf_dlink_df['beta']=round(popt_QBM[2],2)   
 
 
-    if METHOD =='BPR_X':
+    if DOC_RATIO_METHOD =='BPR_X':
         print('BPR_X method calibration...')
         internal_vdf_dlink_df['VOC']=internal_vdf_dlink_df.apply(lambda x: x.Demand/x.avg_discharge_rate if x.congestion_period>=PSTW else x.Demand/ULT_CAP, axis=1 )
 
@@ -307,16 +285,16 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
         Y_data=[]
         for k in range(0,len(internal_vdf_dlink_df)):
             # Hourly VOC data 
-            for kk in range(weight_hourly_data):
+            for kk in range(WEIGHT_HOURLY_DATA):
                 Y_data.append(internal_vdf_dlink_df.loc[k,'speed_period'])
                 X_data.append(internal_vdf_dlink_df.loc[k,'VOC'])
             # Period VOC data
-            for kk in range(weight_period_data):
+            for kk in range(WEIGHT_PERIOD_DATA):
                 Y_data.append(internal_vdf_dlink_df['speed_period'].mean())
                 X_data.append(internal_vdf_dlink_df['VOC_period'].mean())
-            for kk in range(weight_max_cong_period):
+            for kk in range(WEIGHT_UPPER_BOUND_DOC_RATIO):
                 Y_data.append(0.001)
-                X_data.append(max_cong_period(period_name,vdf_name))
+                X_data.append(max_cong_period(period_name, vdf_name, ASSIGNMENT_PERIOD, UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH))
 
         x = np.array(X_data)
         y = np.array(Y_data)
@@ -330,18 +308,19 @@ def vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_C
         plt.plot(volume_speed_func(xvals,*popt_BPR_X,*popt_1)/ULT_CAP,bpr_func(xvals, *popt_BPR_X),c='b')
         
         BPR_X_PE=np.mean(np.abs((bpr_func(x, *popt_BPR_X)-y)/y))
-        print('BPR_X,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RMSE='+str(round(BPR_X_RMSE,2))+' RSE='+str(round(BPR_X_RSE,2)))
-        plt.title('BPR_X,'+str(vdf_name[1]*100+vdf_name[0])+' '+str(period_name)+',RSE='+str(round(BPR_X_RSE,2))+'%,ffs='+str(round(popt_BPR_X[0],2))+',alpha='+str(round(popt_BPR_X[1],2))+',beta='+str(round(popt_BPR_X[2],2)))
+        #print('BPR_X,'+str(vdf_name)+' '+str(period_name)+',RMSE='+str(round(BPR_X_RMSE,2))+'RSE='+str(round(BPR_X_RSE,2)))
+        plt.title('BPR_X,'+str(vdf_name[0]+vdf_name[1]*100)+' '+str(period_name)+',RSE='+str(round(BPR_X_RSE,2))+'%,ffs='+str(round(popt_BPR_X[0],2))+',alpha='+str(round(popt_BPR_X[1],2))+',beta='+str(round(popt_BPR_X[2],2)))
         plt.xlabel('VOC')
         plt.ylabel('speed (mph)')
-        plt.savefig('./2_VDF_BPR_X '+str(vdf_name[1]*100+vdf_name[0])+'_'+str(period_name)+'.png')    
+        plt.savefig('./2_VDF_BPR_X '+str(vdf_name[0]+vdf_name[1]*100)+'_'+str(period_name)+'.png')    
         plt.close() 
         internal_vdf_dlink_df['alpha']=round(popt_BPR_X[1],2)
         internal_vdf_dlink_df['beta']=round(popt_BPR_X[2],2)   
 
     return internal_vdf_dlink_df
 
-def vdf_calculation_daily(temp_daily_df,vdf_name,CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,mm):
+def vdf_calculation_daily(temp_daily_df, vdf_name, CUT_OFF_SPD, ULT_CAP, K_CRI, FFS, mm, ASSIGNMENT_PERIOD,
+                          UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH):
     p0=np.array([FFS,0.15,4])
     lowerbound_fitting=[FFS,0.15,1.01]
     upperbound_fitting=[FFS*1.1,10,10]
@@ -349,22 +328,20 @@ def vdf_calculation_daily(temp_daily_df,vdf_name,CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,m
 
     X_data=[]
     Y_data=[]
-
-    #output_df_daily['d_over_c_bprx']=output_df_daily.apply(lambda x: x.density_period/K_CRI,axis=1)
-    
+   
     for k in range(0,len(temp_daily_df)):
         # Hourly VOC data 
-        for kk in range(weight_hourly_data):
+        for kk in range(WEIGHT_HOURLY_DATA):
             Y_data.append(temp_daily_df.loc[k,'speed_period'])
             X_data.append(temp_daily_df.loc[k,'VOC'])
         # Period VOC data
             # Period VOC data
-        for kk in range(weight_period_data):
+        for kk in range(WEIGHT_PERIOD_DATA):
             Y_data.append(temp_daily_df['speed_period'].mean())
             X_data.append(temp_daily_df['VOC_period'].mean())
-        for kk in range(weight_max_cong_period):
+        for kk in range(WEIGHT_UPPER_BOUND_DOC_RATIO):
             Y_data.append(0.001)
-            X_data.append(max_cong_period("Day",vdf_name))
+            X_data.append(max_cong_period("Day", vdf_name, ASSIGNMENT_PERIOD, UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH))
         x = np.array(X_data)
         y = np.array(Y_data)
 
@@ -378,11 +355,11 @@ def vdf_calculation_daily(temp_daily_df,vdf_name,CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,m
     plt.plot(volume_speed_func(xvals,*popt_daily,*popt_1)/ULT_CAP,bpr_func(xvals, *popt_daily),c='b')
         
     daily_PE=np.mean(np.abs((bpr_func(x, *popt_daily)-y)/y))
-    print('Daily_'+METHOD+','+str(vdf_name[1]*100+vdf_name[0])+',RMSE='+str(round(daily_RMSE,2))+'RSE='+str(round(daily_RSE,2)))
-    plt.title('Daily_'+METHOD+','+str(vdf_name[1]*100+vdf_name[0])+',RSE='+str(round(daily_RSE,2))+'%,ffs='+str(round(popt_daily[0],2))+',alpha='+str(round(popt_daily[1],2))+',beta='+str(round(popt_daily[2],2)))
+    #print('Daily_'+DOC_RATIO_METHOD+','+str(vdf_name)+',RMSE='+str(round(daily_RMSE,2))+'RSE='+str(round(daily_RSE,2)))
+    plt.title('Daily_'+DOC_RATIO_METHOD+','+str(vdf_name[0]+vdf_name[1]*100)+',RSE='+str(round(daily_RSE,2))+'%,ffs='+str(round(popt_daily[0],2))+',alpha='+str(round(popt_daily[1],2))+',beta='+str(round(popt_daily[2],2)))
     plt.xlabel('VOC')
     plt.ylabel('speed (mph)')
-    plt.savefig('./2_VDF_'+METHOD+'_'+str(vdf_name[1]*100+vdf_name[0])+'_day.png')    
+    plt.savefig('./2_VDF_'+DOC_RATIO_METHOD+'_'+str(vdf_name[0]+vdf_name[1]*100)+'_day.png')    
     plt.close()
     alpha_dict[temp_daily_df.VDF_TYPE.unique()[0]]=round(popt_daily[1],2)
     beta_dict[temp_daily_df.VDF_TYPE.unique()[0]]=round(popt_daily[2],2)
@@ -398,6 +375,7 @@ def calculate_congestion_period(speed_15min,volume_15min,CUT_OFF_SPD,ULT_CAP):
     nb_time_stamp=len(speed_15min)
     min_speed=min(speed_15min)
     min_index=speed_15min.index(min(speed_15min)) # The index of speed with minimum value 
+    
     # start time and ending time of prefered service time window
     PSTW_st=max(min_index-2,0)
     PSTW_ed=min(min_index+1,nb_time_stamp)
@@ -406,7 +384,7 @@ def calculate_congestion_period(speed_15min,volume_15min,CUT_OFF_SPD,ULT_CAP):
             PSTW_ed=PSTW_ed+(3-(PSTW_ed - PSTW_st))
         if PSTW_ed==nb_time_stamp:
             PSTW_st=PSTW_st-(3-(PSTW_ed - PSTW_st))
-    PSTW=(PSTW_ed-PSTW_st+1)*(TIM_STAMP/60)
+    PSTW=(PSTW_ed-PSTW_st+1)*(TIME_INTERVAL_IN_MIN/60)
     PSTW_volume=np.array(volume_15min[PSTW_st:PSTW_ed+1]).sum()
     PSTW_speed=np.array(speed_15min[PSTW_st:PSTW_ed+1]).mean()
 
@@ -419,14 +397,14 @@ def calculate_congestion_period(speed_15min,volume_15min,CUT_OFF_SPD,ULT_CAP):
                 t3=i-1
                 break
         for j in range(min_index,-1,-1):
-            #pyinstaller --onefile hello.pyt0=PSTW_st
+            #t0=PSTW_st
             if speed_15min[j]>CUT_OFF_SPD:               
                 t0=j+1
                 break
     elif min_speed >CUT_OFF_SPD:
         t0=0
         t3=0
-    congestion_period=(t3-t0+1)*(TIM_STAMP/60)
+    congestion_period=(t3-t0+1)*(TIME_INTERVAL_IN_MIN/60)
     Mu=np.mean(volume_hour[t0:t3+1])
     #gamma=(plink.waiting_time.mean()*120*plink.Mu)/np.power(plink.congestion_period,4)   
     
@@ -439,7 +417,7 @@ def calculate_congestion_period(speed_15min,volume_15min,CUT_OFF_SPD,ULT_CAP):
 
     return t0, t3,congestion_period,PSTW_st,PSTW_ed,PSTW,Demand,Mu,speed_period
 
-# In[10] Validation
+# In[10] Validations
 def validation(ffs,alpha,beta,K_CRI,mm,volume,capacity):
     u_assign=ffs/(1+alpha*np.power(volume/capacity,beta))
     A=np.power(np.power(ffs/u_assign,mm),0.5)
@@ -447,22 +425,58 @@ def validation(ffs,alpha,beta,K_CRI,mm,volume,capacity):
     
     return flow_assign
 
-# In[11] Check if the samples are complete 
-def nb_sample_checking(period):
-    if period == "1400_1800":
-        return 4*(60/TIM_STAMP)
-    if period == "0600_0900":
-        return 3*(60/TIM_STAMP)        
-    if period == "0900_1400":
-        return 5*(60/TIM_STAMP)
-    if period == "1800_0600":
-        return 12*(60/TIM_STAMP)
+# In[11] Check whether the samples are complete 
+def nb_sample_checking(period, ASSIGNMENT_PERIOD, UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH):
+    nb_period=len(ASSIGNMENT_PERIOD)
+    for i in range(nb_period):
+        if period == ASSIGNMENT_PERIOD[i]:
+            return PERIOD_LENGTH[i] * (60 / TIME_INTERVAL_IN_MIN)
 
 
 # In[12] Main function
 if  __name__ == "__main__":
+    # In[1] Set parameters. 
+    with open('./setting.csv',encoding='UTF-8') as setting_file:
+        setting_csv = csv.reader(setting_file)
+        for row in setting_csv:
+            if row[0] == "DOC_RATIO_METHOD": # volume based method, VBM; density based method, DBM, and queue based method QBM, or BPR_X
+                DOC_RATIO_METHOD = row[1]
+            if row[0] == "OUTPUT": # DAY, or PERIOD
+                OUTPUT = row[1]
+            if row [0] =="PHF_METHOD": # method to calculate the peak hour factor 
+                PHF_METHOD = row[1] # volume based method, VBM; speed based method SBM
+            if row [0] == "LOG_FILE":
+                LOG_FILE= int(row[1])
+            if row[0] == "TIME_INTERVAL_IN_MIN":
+                TIME_INTERVAL_IN_MIN = float(row[1])
+            if row[0] == "UPPER_BOUND_JAM_DENSITY": # upper bound of the jam density
+                UPPER_BOUND_JAM_DENSITY = float(row[1])
+            if row [0] == "MIN_THRESHOLD_SAMPLING":
+                MIN_THRESHOLD_SAMPLING = float(row[1])
+            if row [0] == "WEIGHT_HOURLY_DATA":
+                WEIGHT_HOURLY_DATA = int(row[1])
+            if row [0] == "WEIGHT_PERIOD_DATA":
+                WEIGHT_PERIOD_DATA = int(row[1])
+            if row [0] == "WEIGHT_UPPER_BOUND_DOC_RATIO":
+                WEIGHT_UPPER_BOUND_DOC_RATIO= int(row[1])
+            if row[0] =="ASSIGNMENT_PERIOD":
+                ASSIGNMENT_PERIOD = row[1].split(";")
+            if row[0] =="UPPER_BOUND_DOC_RATIO":
+                UPPER_BOUND_DOC_RATIO = list(map(float,row[1].split(";"))) # set the upper bound of congestion period 
+
+    
+    PERIOD_LENGTH=[]
+    for jj in ASSIGNMENT_PERIOD:
+        time_ss = [int(var[0:2]) for var in jj.split('_')]
+        if time_ss[0] > time_ss[1]:
+            Interval_value = time_ss[1] + 24 - time_ss[0]
+        else:
+            Interval_value = time_ss[1] - time_ss[0]
+        PERIOD_LENGTH.append(Interval_value)
+
+
     # Step 1: Input data...
-    if FILE ==1: 
+    if LOG_FILE ==1: 
         log_file = open("./log.txt", "w")
         log_file.truncate()
         log_file.write('Step 1:Input data...\n')
@@ -471,11 +485,14 @@ if  __name__ == "__main__":
     start_time=time.time()
 
     training_set=input_data()
-    
+    # Calculate the length of period and max congest period
+
+
+
     end_time=time.time()
     print('CPU time:',end_time-start_time,'s\n')
     
-    if FILE ==1: 
+    if LOG_FILE ==1: 
         log_file.write('CPU time:'+ str(end_time-start_time)+'s\n\n')
 
     # Group based on VDF types...
@@ -491,24 +508,24 @@ if  __name__ == "__main__":
     for vdf_name,vdf_trainingset in vdf_group: 
         temp_daily_df=pd.DataFrame() # build up empty dataframe
         # Step 2: For each VDF, calibrate basic coefficients for fundamental diagrams
-        print('Step 2: Calibrate'+str(vdf_name)+' key coeeficients...')
-        if FILE ==1: 
-            log_file.write('Step 2: Calibrate'+str(vdf_name)+' key coeeficients...\n')
+        print('Step 2: Calibrate'+str(vdf_name)+' key coefficients...')
+        if LOG_FILE ==1: 
+            log_file.write('Step 2: Calibrate'+str(vdf_name)+' key coefficients...\n')
 
         start_time=time.time()
         vdf_trainingset.reset_index(drop=True, inplace=True)
-        CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,mm=calibrate_traffic_flow(vdf_trainingset,vdf_name)
+        CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,mm=calibrate_traffic_flow(vdf_trainingset,vdf_name) # calibrate parameters of traffic flow model
 
         end_time=time.time()
 
         print('CPU time:',end_time-start_time,'s\n')
         
-        if FILE ==1: 
+        if LOG_FILE ==1: 
             log_file.write('CPU time:'+str(end_time-start_time)+'s\n\n')
 
         # Step 3: For each VDF and period, calibrate alpha and beta
         print('Step 3: Calibrate VDF function of links for VDF_type: '+str(vdf_name)+' and time period...')
-        if FILE ==1: 
+        if LOG_FILE ==1: 
             log_file.write('Step 3: Calibrate VDF function of links for VDF_type: '+str(vdf_name)+' and time period...\n')
 
         start_time=time.time()
@@ -522,7 +539,7 @@ if  __name__ == "__main__":
             
             # Step 3.1 Calculate the VOC (congestion period)
             print('Step 3.1: Calculate the VOCs of links: '+str(vdf_name)+' and time period '+str(period_name))
-            if FILE ==1: 
+            if LOG_FILE ==1: 
                 log_file.write('Step 3.1: Calculate the VOCs of links: '+str(vdf_name)+' and time period '+str(period_name)+'\n')
 
             for dlink_name,dlink_training_set in dlink_group:
@@ -537,10 +554,12 @@ if  __name__ == "__main__":
                 vol_period_hourly=dlink_training_set['volume_hourly'].mean()
                 speed_period=dlink_training_set['speed'].mean()
                 density_period=dlink_training_set['density'].mean()
-                if len(dlink_training_set)<nb_sample_checking(period_name):
-                    print('WARNING:  link ',dlink_id, 'in period', period_name, 'does not have all 15 minutes records...')
-                    print ((1-len(dlink_training_set)/nb_sample_checking(period_name))*100,'% of records of the link of the time period are missing...\n')
-                    if (1-len(dlink_training_set)/nb_sample_checking(period_name)) >= INCOMP_SAMPLE:
+                if len(dlink_training_set) < nb_sample_checking(period_name, ASSIGNMENT_PERIOD, UPPER_BOUND_DOC_RATIO,PERIOD_LENGTH):
+                    print('WARNING:  link ', dlink_id, 'in period', period_name,'does not have all 15 minutes records...')
+                    print((1 - len(dlink_training_set) / nb_sample_checking(period_name, ASSIGNMENT_PERIOD,UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH)) * 100,
+                          '% of records of the link of the time period are missing...\n')
+                    if (1 - len(dlink_training_set) / nb_sample_checking(period_name, ASSIGNMENT_PERIOD,UPPER_BOUND_DOC_RATIO,
+                                                                         PERIOD_LENGTH)) >= MIN_THRESHOLD_SAMPLING:
                         continue
                 
                 volume_15min=dlink_training_set.volume_pl.to_list()
@@ -550,18 +569,20 @@ if  __name__ == "__main__":
                 # Step 4.1 Calculate VOC
                 t0, t3,congestion_period,PSTW_st,PSTW_ed,PSTW,Demand,avg_discharge_rate,speed_period_1=calculate_congestion_period(speed_15min,volume_15min,CUT_OFF_SPD,ULT_CAP)
                 # d_over_c_bprx is the VOC for queue-based method 
-                # Calculate peak factor for each link
+                # Calculate peak hour factor for each link
                 vol_hour_max=np.max(volume_hour)
-                if SPD_CAP==1:
-                    peak_factor=vol_period/max(Demand,ULT_CAP/7)
-                    if peak_factor ==1:
-                        print('WARNING: peak factor is 1,delete the link')
+                EPS = ULT_CAP/7 # setting a lower bound of demand 
+                if PHF_METHOD=='SBM':
+                    peak_hour_factor=vol_period/max(Demand,EPS)
+                    if peak_hour_factor ==1:
+                        print('WARNING: peak hour factor is 1,delete the link')
                         continue
-                else:
-                    peak_factor=vol_period/vol_hour_max      
+                if PHF_METHOD=='VBM':
+                #vol_hour_max=np.max(volume_hour)
+                    peak_hour_factor=vol_period/vol_hour_max      
                 
                 dlink=[dlink_id,from_node_id, to_node_id,date,FT,AT,period,vol_period, vol_period_hourly,\
-                    speed_period,density_period,t0,t3,Demand,avg_discharge_rate,peak_factor,congestion_period]
+                    speed_period,density_period,t0,t3,Demand,avg_discharge_rate,peak_hour_factor,congestion_period]
                 vdf_dlink_list.append(dlink)
 
             
@@ -581,19 +602,20 @@ if  __name__ == "__main__":
                                     12:'t3',
                                     13:'Demand',
                                     14:'avg_discharge_rate',
-                                    15:'peak_factor',
+                                    15:'peak_hour_factor',
                                     16:'congestion_period'}, inplace=True)
-            #internal_vdf_dlink_df.to_csv('./1_'+str(vdf_name)+','+str(period_name)+'training_set.csv',index=False)
-            peak_factor_avg=np.mean(internal_vdf_dlink_df.peak_factor) 
+            internal_vdf_dlink_df.to_csv('./1_'+str(100*vdf_name[1]+vdf_name[0])+','+str(period_name)+'training_set.csv',index=False)
+            peak_factor_avg=np.mean(internal_vdf_dlink_df.peak_hour_factor) 
             
             # Step 4.2 VDF calibration
             print('Step 3.2 :VDF calibration: '+str(vdf_name)+' and time period '+str(period_name))
-            if FILE ==1: 
+            if LOG_FILE ==1: 
                 log_file.write('Step 3.2 :VDF calibration: '+str(vdf_name)+' and time period '+str(period_name)+'\n')
 
-            calibration_vdf_dlink_results=vdf_calculation(internal_vdf_dlink_df,vdf_name,period_name,CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,mm,peak_factor_avg)
-            #calibration_vdf_dlink_results.to_csv('./1_'+str(vdf_name)+','+str(period_name)+'training_output.csv',index=False)
-            
+            calibration_vdf_dlink_results = vdf_calculation(internal_vdf_dlink_df, vdf_name, period_name, CUT_OFF_SPD,
+                                                            ULT_CAP, K_CRI, FFS, mm, peak_factor_avg, ASSIGNMENT_PERIOD,
+                                                            UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH)
+            #calibration_vdf_dlink_results.to_csv('./1_'+str(100*vdf_name[1]+vdf_name[0])+'_'+str(period_name)+'training_output.csv',index=False)
             grouyby_results=calibration_vdf_dlink_results.groupby(['link_id','from_node_id','to_node_id','FT','AT','period'])
             vdf_link_list=[]
             for link_name,calibration_outputs in grouyby_results:
@@ -614,12 +636,12 @@ if  __name__ == "__main__":
                 VOC_period=calibration_outputs.VOC_period.mean()
                 alpha=calibration_outputs.alpha.mean()
                 beta=calibration_outputs.beta.mean()
-                peak_factor=calibration_outputs.peak_factor.mean()
-                period_capacity=peak_factor*ULT_CAP
+                peak_hour_factor=calibration_outputs.peak_hour_factor.mean()
+                period_capacity=peak_hour_factor*ULT_CAP
                 vol_valid=validation(FFS,alpha,beta,K_CRI,mm,vol_period,period_capacity)
                 demand_est=VOC*period_capacity
                 vdf_link=[link_id,from_node_id, to_node_id,FT,AT,period,vol_period, vol_period_hourly,speed_period,density_period,t0,t3,Demand,VOC,\
-                    VOC_period,alpha,beta,peak_factor,period_capacity,vol_valid,demand_est]
+                    VOC_period,alpha,beta,peak_hour_factor,period_capacity,vol_valid,demand_est]
                 vdf_link_list.append(vdf_link)
             
             internal_vdf_link_df= pd.DataFrame(vdf_link_list)
@@ -640,7 +662,7 @@ if  __name__ == "__main__":
                                     14:'VOC_period',
                                     15:'alpha',
                                     16:'beta',
-                                    17:'peak_factor',
+                                    17:'peak_hour_factor',
                                     18:'period_cap',                                    
                                     19:'vol_valid',
                                     20:'demand_est'}, inplace=True)
@@ -652,39 +674,43 @@ if  __name__ == "__main__":
             per_error_demand=np.mean(np.abs(internal_vdf_link_df['vol_period']-internal_vdf_link_df['demand_est'])/internal_vdf_link_df['demand_est'])
             alpha_1=np.mean(internal_vdf_link_df.alpha)
             beta_1=np.mean(internal_vdf_link_df.beta)
-            peak_factor_1=np.mean(internal_vdf_link_df.peak_factor)
+            peak_factor_1=np.mean(internal_vdf_link_df.peak_hour_factor)
             para=[vdf_name,100*vdf_name[1]+vdf_name[0],vdf_name[0],vdf_name[1],period_name,CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,mm,peak_factor_1,alpha_1,beta_1,\
                 per_error,per_error_demand]
             g_parameter_list.append(para)
+            # para=[vdf_name,vdf_name[0], vdf_name[1],period_name, CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,mm]
+            # g_parameter_list.append(para)
             iter = iter + 1
             end_time=time.time()
             print('CPU time:',end_time-start_time,'s\n')
-            if FILE ==1:
+            if LOG_FILE ==1:
                 log_file.write ('CPU time:'+str(end_time-start_time)+'s\n\n')
 
         # Step 4 Calibrate daily VDF function 
         print('Step 4: Calibrate daily VDF function for VDF_type:'+str(vdf_name)+'...\n')
         
-        if FILE ==1:
+        if LOG_FILE ==1:
             log_file.write('Step 4: Calibrate daily VDF function for VDF_type:'+str(vdf_name)+'...\n')
         
         start_time=time.time()
 
         temp_daily_df=temp_daily_df.reset_index(drop=True)
         temp_daily_df['VDF_TYPE']=100*temp_daily_df.AT+temp_daily_df.FT
-        alpha_dict, beta_dict,temp_daily_df =vdf_calculation_daily(temp_daily_df,vdf_name,CUT_OFF_SPD,ULT_CAP,K_CRI,FFS,mm)
+        alpha_dict, beta_dict, temp_daily_df = vdf_calculation_daily(temp_daily_df, vdf_name, CUT_OFF_SPD, ULT_CAP,
+                                                                     K_CRI, FFS, mm, ASSIGNMENT_PERIOD,
+                                                                     UPPER_BOUND_DOC_RATIO, PERIOD_LENGTH)
         output_df_daily = pd.concat([output_df_daily,temp_daily_df],sort=False)
         
         end_time=time.time()
         print('CPU time:',end_time-start_time,'s\n')        
         
-        if FILE ==1:
+        if LOG_FILE ==1:
             log_file.write('CPU time:'+str(end_time-start_time)+'s\n\n')
 
 
     # Step 6 Output results 
     print('Step 5: Output...\n')
-    if FILE ==1: 
+    if LOG_FILE ==1: 
         log_file.write('Step 5: Output...\n')
     para_df= pd.DataFrame(g_parameter_list)
     para_df.rename(columns={0:'VDF',
@@ -697,7 +723,7 @@ if  __name__ == "__main__":
                                 7:'K_CRI',
                                 8:'FFS',
                                 9: 'mm',
-                                10:'peak_factor',
+                                10:'peak_hour_factor',
                                 11:'alpha',
                                 12:'beta',
                                 13:'per_error',
@@ -708,6 +734,6 @@ if  __name__ == "__main__":
     
 
     print('END...')
-    if FILE ==1: 
+    if LOG_FILE ==1: 
         log_file.write('END...\n')
         log_file.close()

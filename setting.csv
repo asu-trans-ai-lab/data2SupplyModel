@@ -1,0 +1,13 @@
+key,value,description, options
+DOC_RATIO_METHOD,QBM, The method to calculate the demand over capacity (DOC) measures for BPR function calibration, Volume-based method (VBM) Density-based method (DBM) Queue-based method (QBM)
+PHF_METHOD,SBM, The method to calculate the peak hour factor (PHF), speed-based method (SBM) and volume-based method (VBM)
+OUTPUT,DAY, The type of outputs, Day or Period
+LOG_FILE,1, Open the log file or not, 1 and 0
+TIME_INTERVAL_IN_MIN,15, the time stamp in minutes in the observation records ,
+UPPER_BOUND_JAM_DENSITY,220, the upper bound of density in the fundamental diagram,
+MIN_THRESHOLD_SAMPLING,0.5, If the missing data of a link during a peak period less than the threshold delete the data ,
+WEIGHT_HOURLY_DATA,1,Weight of hourly data during calibration,
+WEIGHT_PERIOD_DATA,5,Weight of average period speed and volume during the calibration ,
+WEIGHT_UPPER_BOUND_DOC_RATIO,100, Weight of prompting the VDF curve to 0 when the DOC is close to its maximum values  ,
+ASSIGNMENT_PERIOD,0600_0900;0900_1400;1400_1800;1800_0600;1400_2300, Assignment periods,
+UPPER_BOUND_DOC_RATIO,3;5;4;5;5,Upper bound of the congestion period (DOC ratio),
