@@ -335,7 +335,7 @@ if  __name__ == "__main__":
     UPPER_BOUND_JAM_DENSITY=220 # we assume that the jam density is 220 vehicle/mile
     MIN_THRESHOLD_SAMPLING=0 # if the missing data of a link during a peak period less than the threshold delete the data 
     WEIGHT_HOURLY_DATA=1 # Weight of hourly data during calibratio
-    WEIGHT_PERIOD_DATA=0 # Weight of average period speed and volume during the calibration
+    WEIGHT_PERIOD_DATA=5 # Weight of average period speed and volume during the calibration
     WEIGHT_UPPER_BOUND_DOC_RATIO=100 # Weight of prompting the VDF curve to 0 when the DOC is close to its maximum values
 
     # Step 1: Read input data
