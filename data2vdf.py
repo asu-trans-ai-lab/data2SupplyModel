@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import csv
+import sys
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
@@ -16,6 +17,8 @@ g_vdf_group_list=[]
 def input_data():
     data_df=pd.read_csv('./test/link_performance.csv',encoding='UTF-8') # create data frame from the input link_performance.csv 
     data_df =data_df.drop(data_df[(data_df.volume == 0) | (data_df.speed == 0)].index) # drop all rows that have 0 volume or speed
+    data_df =data_df[(data_df['FT']==0)|(data_df['FT']==6)|(data_df['FT']==1)]
+    #data_df =data_df[data_df['AT']==1]
     data_df.dropna(axis=0, how='any',inplace=True) # drop all rows that have any null value
     data_df.reset_index(drop=True, inplace=True)  # reset the index of the dataframe
     # Calculate some derived properties for each link
@@ -44,27 +47,29 @@ def bpr_func(x,ffs,alpha,beta): # BPR volume delay function input: volume over c
 
 # In[3] Calibrate traffic flow model 
 def calibrate_traffic_flow_model(vdf_training_set,vdf_index):
-
     # 1. set the lower bound and upper bound of the free flow speed value 
-    lower_bound_FFS=vdf_training_set['speed'].quantile(0.95) # Assume that the lower bound of freeflow speed should be larger than the mean value of speed
+    lower_bound_FFS=vdf_training_set['speed'].quantile(0.9) # Assume that the lower bound of freeflow speed should be larger than the mean value of speed
     upper_bound_FFS=np.maximum(vdf_training_set['speed'].max(),lower_bound_FFS+0.1)  
     # Assume that the upper bound of freeflow speed should at least larger than the lower bound, and less than the 95% of speed
 
-    # 2. generate the outer layer of density-volume scatters 
+    # 2. generate the outer layer of density-speed  scatters 
     vdf_training_set_after_sorting=vdf_training_set.sort_values(by = 'speed') # sort speed value from the smallest to the largest 
     vdf_training_set_after_sorting.reset_index(drop=True, inplace=True) # reset the index 
     X_data=[]
     Y_data=[]
     for k in range(0,len(vdf_training_set_after_sorting),10):
         Y_data.append(vdf_training_set_after_sorting.loc[k:k+10,'speed'].mean()) # for every ten records, we use the mean speed
-        threshold=vdf_training_set_after_sorting.loc[k:k+10,'density'].quantile(0.99) # calculate tdensity value at 95% quantile
+        threshold=vdf_training_set_after_sorting.loc[k:k+10,'density'].quantile(OUTER_LAYER_QUANTILE) # calculate tdensity value at 95% quantile
         internal_vdf_training_set_after_sorting=vdf_training_set_after_sorting.loc[k:k+10] # only keep the samples with density values larger than the 95% quantile for calibration
         X_data.append(internal_vdf_training_set_after_sorting[(internal_vdf_training_set_after_sorting['density']>=threshold)]['density'].mean())
+    # XY_data=pd.DataFrame({'X_data':X_data,'Y_data':Y_data})
+    # XY_data=XY_data[~XY_data.isin([np.nan, np.inf, -np.inf]).any(1)]
+    # density_data =XY_data.X_data.values
+    # speed_data = XY_data.Y_data.values
     density_data = np.array(X_data)
     speed_data = np.array(Y_data)
-
     # 3. calibrate traffic flow model using scipy function curve_fit. More information about the function, see https://docs.scipy.org/doc/scipy-0.15.1/reference/generated/scipy.optimize.curve_fit.html
-    popt,pcov = curve_fit(density_speed_function, density_data, speed_data,bounds=[[lower_bound_FFS,0,0],[upper_bound_FFS,UPPER_BOUND_JAM_DENSITY,10]])
+    popt,pcov = curve_fit(density_speed_function, density_data, speed_data,bounds=[[lower_bound_FFS,0,0],[upper_bound_FFS,UPPER_BOUND_CRITICAL_DENSITY,15]])
 
     free_flow_speed=popt[0]
     critical_density=popt[1]
@@ -77,18 +82,22 @@ def calibrate_traffic_flow_model(vdf_training_set,vdf_index):
     print('--free_flow_speed=',free_flow_speed)
     print('--mm=',mm) 
 
-    xvals=np.sort(density_data) # all the data points with density values 
+    xvals=np.linspace(0, UPPER_BOUND_JAM_DENSITY,100) # all the data points with density values 
     #plt.plot(vdf_training_set['density'], vdf_training_set['speed'], '*', c='k', label='original values',markersize=2)
-    plt.plot(vdf_training_set_after_sorting['density'], vdf_training_set_after_sorting['speed'], '*', c='k', label='original values',markersize=1)
-    plt.plot(xvals, density_speed_function(xvals, *popt), '--',c='r',markersize=6)
+    plt.plot(vdf_training_set_after_sorting['density'], vdf_training_set_after_sorting['speed'], '*', c='k', label='observations',markersize=1)
+    plt.scatter(density_data, speed_data,edgecolors='r',color='',label ='outer layer')
+    plt.legend()
+    plt.plot(xvals, density_speed_function(xvals, *popt), '--',c='b',markersize=6)
     plt.title('Density-speed fundamental diagram, VDF: '+str(vdf_index[0]+vdf_index[1]*100))
     plt.xlabel('Density')
     plt.ylabel('Speed')
     plt.savefig('./1_FD_speed_density_'+str(vdf_index[0]+vdf_index[1]*100)+'.png')    
     plt.close() 
     
-    plt.plot(vdf_training_set_after_sorting['hourly_volume_per_lane'], vdf_training_set_after_sorting['speed'], '*', c='k', label='original values',markersize=1)
-    plt.plot(xvals*density_speed_function(xvals, *popt),density_speed_function(xvals, *popt), '--',c='r',markersize=6)
+    plt.plot(vdf_training_set_after_sorting['hourly_volume_per_lane'], vdf_training_set_after_sorting['speed'], '*', c='k', label='observations',markersize=1)
+    plt.plot(xvals*density_speed_function(xvals, *popt),density_speed_function(xvals, *popt), '--',c='b',markersize=6)
+    plt.scatter(density_data*speed_data, speed_data,edgecolors='r',color='',label ='outer layer')
+    plt.legend()
     plt.title('Volume-speed fundamental diagram,VDF: '+str(vdf_index[0]+vdf_index[1]*100))
     plt.xlabel('Volume')
     plt.ylabel('Speed')
@@ -96,7 +105,9 @@ def calibrate_traffic_flow_model(vdf_training_set,vdf_index):
     plt.close() 
 
     plt.plot(vdf_training_set_after_sorting['density'], vdf_training_set_after_sorting['hourly_volume_per_lane'], '*', c='k', label='original values',markersize=1)
-    plt.plot(xvals,xvals*density_speed_function(xvals, *popt), '--',c='r',markersize=6)
+    plt.plot(xvals,xvals*density_speed_function(xvals, *popt), '--',c='b',markersize=6)
+    plt.scatter(density_data,density_data*speed_data,edgecolors='r',color='',label ='outer layer')
+    plt.legend()
     plt.title('Density-volume fundamental diagram,VDF: '+str(vdf_index[0]+vdf_index[1]*100))
     plt.xlabel('Density')
     plt.ylabel('Volume')
@@ -203,7 +214,7 @@ def vdf_calculation(internal_period_vdf_daily_link_df, vdf_index, period_index, 
     xvals=np.linspace(0,20000,100)/internal_period_vdf_daily_link_df.period_capacity.mean()
     plt.plot(internal_period_vdf_daily_link_df.period_volume, internal_period_vdf_daily_link_df.period_mean_daily_speed  , '*', c='k', label='original values',markersize=3)
     plt.plot(np.linspace(0,20000,100),bpr_func(xvals, *popt), '--',c='r',markersize=6)
-    plt.plot(internal_period_vdf_daily_link_df['period_volume'].mean(),internal_period_vdf_daily_link_df['period_mean_daily_speed'].mean(), 'o',c='g',markersize=8)
+    plt.plot(internal_period_vdf_daily_link_df['period_volume'].mean(),internal_period_vdf_daily_link_df['period_mean_daily_speed'].mean(), 'o',c='r',markersize=8)
     plt.title(DOC_RATIO_METHOD+' '+str(vdf_index[0]+vdf_index[1]*100)+' '+str(period_index)+',RSE='+str(round(RSE,2))+'%,ffs='+str(round(popt[0],2))+',alpha='+str(round(popt[1],2))+',beta='+str(round(popt[2],2)))
     plt.xlabel('Assigned_volume')
     plt.ylabel('Speed')
@@ -251,15 +262,23 @@ def vdf_calculation_daily(all_calibration_period_vdf_daily_link_results, vdf_ind
     plt.ylabel('speed')
     plt.savefig('./4_hourly_VDF_'+DOC_RATIO_METHOD+'_'+str(vdf_index[0]+vdf_index[1]*100)+'_day.png')    
     plt.close()
+    
+    plt.plot(all_calibration_period_vdf_daily_link_results.period_volume, all_calibration_period_vdf_daily_link_results.period_mean_daily_speed  , '*', c='k', label='derived training data',markersize=3)
+    maximum_value=all_calibration_period_vdf_daily_link_results.period_volume.max()*2
+    capacity_period_dict= dict(zip(all_calibration_period_vdf_daily_link_results.assignment_period,all_calibration_period_vdf_daily_link_results.period_capacity,)) 
+    
 
-    xvals=np.linspace(0,20000,100)/all_calibration_period_vdf_daily_link_results.period_capacity.mean()
-    plt.plot(all_calibration_period_vdf_daily_link_results.period_volume, all_calibration_period_vdf_daily_link_results.period_mean_daily_speed  , '*', c='k', label='original values',markersize=3)
-    plt.plot(np.linspace(0,20000,100),bpr_func(xvals, *popt_daily), '--',c='r',markersize=6)
-    plt.plot(all_calibration_period_vdf_daily_link_results['period_mean_volume'],all_calibration_period_vdf_daily_link_results['period_mean_speed'], 'o',c='g',markersize=8)
+    for kk in list(all_calibration_period_vdf_daily_link_results.assignment_period.unique()):
+        xvals=np.linspace(0,maximum_value,100)/capacity_period_dict[kk]
+        plt.plot(np.linspace(0,maximum_value,100),bpr_func(xvals, *popt_daily), '--', label = kk, markersize=6)
+        df= all_calibration_period_vdf_daily_link_results[all_calibration_period_vdf_daily_link_results.assignment_period == kk]
+        plt.plot(df['period_mean_volume'],df['period_mean_speed'], 'o', label = kk, markersize=8)
+    
+    plt.legend()
     plt.title('Daily_'+DOC_RATIO_METHOD+' '+str(vdf_index[0]+vdf_index[1]*100)+',RSE='+str(round(daily_RSE,2))+'%,ffs='+str(round(popt_daily[0],2))+',alpha='+str(round(popt_daily[1],2))+',beta='+str(round(popt_daily[2],2)))
     plt.xlabel('Assigned_volume')
     plt.ylabel('Speed')
-    plt.savefig('./4_period_VDF_'+DOC_RATIO_METHOD+'_'+str(vdf_index[0]+vdf_index[1]*100)+'_'+str(period_index)+'.png')    
+    plt.savefig('./4_period_VDF_'+DOC_RATIO_METHOD+'_'+str(vdf_index[0]+vdf_index[1]*100)+'_day.png') 
     plt.close() 
 
     all_calibration_period_vdf_daily_link_results['daily_alpha']=round(popt_daily[1],2)
@@ -300,12 +319,14 @@ def calculate_congestion_duration(speed_series,volume_per_lane_series,speed_at_c
                 t0=j+1
                 break
         congestion_duration=(t3-t0+1)*(TIME_INTERVAL_IN_MIN/60)
+        peak_hour_factor_method='SBM' # if the min_speed of the link within the assignment period is less than the speed_at_capacity, then we use SBM to calculate the peak hour factor
     
     elif min_speed >speed_at_capacity:
         t0=0
         t3=0
         congestion_duration=0
-
+        peak_hour_factor_method='VBM' # if the min_speed of the link within the assignment period is larger than the speed_at_capacity, then we use VBM to calculate the peak hour factor
+    
     average_discharge_rate=np.mean(hourly_volume_per_lane_series[t0:t3+1]) 
     
     if congestion_duration>PSTW:
@@ -315,7 +336,7 @@ def calculate_congestion_duration(speed_series,volume_per_lane_series,speed_at_c
         demand=PSTW_volume
         congestion_period_mean_speed=PSTW_speed
 
-    return t0, t3,congestion_duration,PSTW_start_time,PSTW_ending_time,PSTW,demand,average_discharge_rate,congestion_period_mean_speed
+    return t0, t3,congestion_duration,PSTW_start_time,PSTW_ending_time,PSTW,demand,average_discharge_rate,congestion_period_mean_speed,peak_hour_factor_method
 
 # In[6] Main 
 if  __name__ == "__main__":
@@ -326,14 +347,14 @@ if  __name__ == "__main__":
         for row in setting_csv:
             if row[0] == "DOC_RATIO_METHOD": # volume based method, VBM; density based method, DBM, and queue based method QBM, or BPR_X
                 DOC_RATIO_METHOD = row[1]
-            if row [0] =="PHF_METHOD": # method to calculate the peak hour factor 
-                PHF_METHOD = row[1] # volume based method, VBM; speed based method SBM
 
     # Step 0.2. Internal parameters
     LOG_FILE=1 #Open the log file or not, 1 and 0
     TIME_INTERVAL_IN_MIN=15 #the time stamp in minutes in the observation records
-    UPPER_BOUND_JAM_DENSITY=220 # we assume that the jam density is 220 vehicle/mile
-    MIN_THRESHOLD_SAMPLING=0 # if the missing data of a link during a peak period less than the threshold delete the data 
+    UPPER_BOUND_CRITICAL_DENSITY=50 # we assume that the upper bound of critical density is 50 vehicle/mile
+    UPPER_BOUND_JAM_DENSITY=220 # we assume that the upper bound of jam density is 220 vehicle/mile
+    OUTER_LAYER_QUANTILE=0.9 # The quantile threshold to generate the outer layer to calibrate traffic flow model 
+    MIN_THRESHOLD_SAMPLING=0.5 # if the missing data of a link during a peak period less than the threshold delete the data
     WEIGHT_HOURLY_DATA=1 # Weight of hourly data during calibratio
     WEIGHT_PERIOD_DATA=5 # Weight of average period speed and volume during the calibration
     WEIGHT_UPPER_BOUND_DOC_RATIO=100 # Weight of prompting the VDF curve to 0 when the DOC is close to its maximum values
@@ -413,22 +434,22 @@ if  __name__ == "__main__":
                 hourly_volume_per_lane_series=daily_link_training_set.hourly_volume_per_lane.to_list() # --> hourly_volume_per_lane
                 
                 # Step 3.1 Calculate Demand over capacity and congestion duration
-                t0, t3,congestion_duration,PSTW_start_time,PSTW_ending_time,PSTW,demand,average_discharge_rate,congestion_period_mean_speed=calculate_congestion_duration(speed_series,volume_per_lane_series,speed_at_capacity,ultimate_capacity)
+                t0, t3,congestion_duration,PSTW_start_time,PSTW_ending_time,PSTW,demand,average_discharge_rate,congestion_period_mean_speed,peak_hour_factor_method=calculate_congestion_duration(speed_series,volume_per_lane_series,speed_at_capacity,ultimate_capacity)
 
                 # Step 3.2 Calculate peak hour factor for each link
                 vol_hour_max=np.max(hourly_volume_per_lane_series)
                 EPS = ultimate_capacity/7 # setting a lower bound of demand 
-                if PHF_METHOD=='SBM':
+                if peak_hour_factor_method=='SBM':
                     peak_hour_factor=period_volume/max(demand,EPS) 
-                    # if peak_hour_factor ==1:
-                    #     print('WARNING: peak hour factor is 1,delete the link')
-                    #     continue
-                if PHF_METHOD=='VBM':
+                if peak_hour_factor_method=='VBM':
                     peak_hour_factor=period_volume/vol_hour_max  # per link peak hour factor 
                 
                 daily_link=[link_id,from_node_id, to_node_id,date,FT,AT,period_index,period_volume, period_mean_hourly_volume_per_lane,\
                     period_mean_daily_speed,period_mean_density,t0,t3,demand,average_discharge_rate,peak_hour_factor,congestion_duration,congestion_period_mean_speed]
                 daily_link_list.append(daily_link)
+            if len(daily_link_list) ==0: 
+                print('WARNING: all the links of ' + str(vdf_index[0]+vdf_index[1]*100) + ' during assignment period ' + period_index + ' are not qualified...')
+                continue 
 
             internal_period_vdf_daily_link_df= pd.DataFrame(daily_link_list)
             internal_period_vdf_daily_link_df.rename(columns={0:'link_id',
@@ -449,7 +470,7 @@ if  __name__ == "__main__":
                                     15:'peak_hour_factor',
                                     16:'congestion_duration',
                                     17:'congestion_period_mean_speed'}, inplace=True)
-            internal_period_vdf_daily_link_df.to_csv('./2_training_set_'+str(100*vdf_index[1]+vdf_index[0])+'_'+str(period_index),index=False)
+            internal_period_vdf_daily_link_df.to_csv('./2_training_set_'+str(100*vdf_index[1]+vdf_index[0])+'_'+str(period_index)+'.csv',index=False)
             # Step 3.3 calculate the peak hour factor for each period and VDF type 
             period_peak_hour_factor=np.mean(internal_period_vdf_daily_link_df.peak_hour_factor) 
             internal_period_vdf_daily_link_df['period_peak_hour_factor']=period_peak_hour_factor
