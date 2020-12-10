@@ -17,7 +17,6 @@ g_vdf_group_list=[]
 def input_data():
     data_df=pd.read_csv('./test/link_performance.csv',encoding='UTF-8') # create data frame from the input link_performance.csv 
     data_df =data_df.drop(data_df[(data_df.volume == 0) | (data_df.speed == 0)].index) # drop all rows that have 0 volume or speed
-    #data_df =data_df[data_df['AT']==1]
     data_df.dropna(axis=0, how='any',inplace=True) # drop all rows that have any null value
     data_df.reset_index(drop=True, inplace=True)  # reset the index of the dataframe
     # Calculate some derived properties for each link
@@ -54,25 +53,21 @@ def calibrate_traffic_flow_model(vdf_training_set,vdf_index):
     # 2. generate the outer layer of density-speed  scatters 
     vdf_training_set_after_sorting=vdf_training_set.sort_values(by = 'speed') # sort speed value from the smallest to the largest 
     vdf_training_set_after_sorting.reset_index(drop=True, inplace=True) # reset the index
-    step_size=int((vdf_training_set['speed'].max()-vdf_training_set['speed'].min())/NUMBER_OF_OUTER_LAYER_SAMPLES) # determine the step_size of each segment to generate the outer layer 
+    step_size=np.maximum(1,int((vdf_training_set['speed'].max()-vdf_training_set['speed'].min())/LOWER_BOUND_OF_OUTER_LAYER_SAMPLES)) # determine the step_size of each segment to generate the outer layer 
     X_data=[]
     Y_data=[]
-    for k in range(0,int(np.ceil(vdf_training_set['speed'].max())),int(step_size)):
+    for k in range(0,int(np.ceil(vdf_training_set['speed'].max())),step_size):
         segment_df = vdf_training_set_after_sorting[(vdf_training_set_after_sorting.speed<k+step_size)&(vdf_training_set_after_sorting.speed>=k)]
         Y_data.append(segment_df.speed.mean())
         threshold=segment_df['density'].quantile(OUTER_LAYER_QUANTILE)
         X_data.append(segment_df[(segment_df['density']>=threshold)]['density'].mean())
-    # for k in range(0,len(vdf_training_set_after_sorting),10):
-    #     Y_data.append(vdf_training_set_after_sorting.loc[k:k+10,'speed'].mean()) # for every ten records, we use the mean speed
-    #     threshold=vdf_training_set_after_sorting.loc[k:k+10,'density'].quantile(OUTER_LAYER_QUANTILE) # calculate tdensity value at 95% quantile
-    #     internal_vdf_training_set_after_sorting=vdf_training_set_after_sorting.loc[k:k+10] # only keep the samples with density values larger than the 95% quantile for calibration
-    #     X_data.append(internal_vdf_training_set_after_sorting[(internal_vdf_training_set_after_sorting['density']>=threshold)]['density'].mean())
     XY_data=pd.DataFrame({'X_data':X_data,'Y_data':Y_data})
     XY_data=XY_data[~XY_data.isin([np.nan, np.inf, -np.inf]).any(1)] # delete all the infinite and null values 
+    if len(XY_data)==0:
+        print('WARNING: No available data within all speed segments')
+        exit()
     density_data =XY_data.X_data.values
     speed_data = XY_data.Y_data.values
-    # density_data = np.array(X_data)
-    # speed_data = np.array(Y_data)
     # 3. calibrate traffic flow model using scipy function curve_fit. More information about the function, see https://docs.scipy.org/doc/scipy-0.15.1/reference/generated/scipy.optimize.curve_fit.html
     popt,pcov = curve_fit(density_speed_function, density_data, speed_data,bounds=[[lower_bound_FFS,0,0],[upper_bound_FFS,UPPER_BOUND_CRITICAL_DENSITY,15]])
 
@@ -88,7 +83,6 @@ def calibrate_traffic_flow_model(vdf_training_set,vdf_index):
     print('--mm=',mm) 
 
     xvals=np.linspace(0, UPPER_BOUND_JAM_DENSITY,100) # all the data points with density values 
-    #plt.plot(vdf_training_set['density'], vdf_training_set['speed'], '*', c='k', label='original values',markersize=2)
     plt.plot(vdf_training_set_after_sorting['density'], vdf_training_set_after_sorting['speed'], '*', c='k', label='observations',markersize=1)
     plt.plot(xvals, density_speed_function(xvals, *popt), '--',c='b',markersize=6)
     plt.scatter(density_data, speed_data,edgecolors='r',color='r',label ='outer layer',zorder=30)
@@ -359,7 +353,7 @@ if  __name__ == "__main__":
     UPPER_BOUND_CRITICAL_DENSITY=50 # we assume that the upper bound of critical density is 50 vehicle/mile
     UPPER_BOUND_JAM_DENSITY=220 # we assume that the upper bound of jam density is 220 vehicle/mile
     OUTER_LAYER_QUANTILE=0.9 # The quantile threshold to generate the outer layer to calibrate traffic flow model
-    NUMBER_OF_OUTER_LAYER_SAMPLES=20 # number_of_outer_layer_samples
+    LOWER_BOUND_OF_OUTER_LAYER_SAMPLES=20 # number_of_outer_layer_samples
     MIN_THRESHOLD_SAMPLING=0.5 # if the missing data of a link during a peak period less than the threshold delete the data
     WEIGHT_HOURLY_DATA=1 # Weight of hourly data during calibratio
     WEIGHT_PERIOD_DATA=5 # Weight of average period speed and volume during the calibration
@@ -453,6 +447,7 @@ if  __name__ == "__main__":
                 daily_link=[link_id,from_node_id, to_node_id,date,FT,AT,period_index,period_volume, period_mean_hourly_volume_per_lane,\
                     period_mean_daily_speed,period_mean_density,t0,t3,demand,average_discharge_rate,peak_hour_factor,congestion_duration,congestion_period_mean_speed]
                 daily_link_list.append(daily_link)
+            
             if len(daily_link_list) ==0: 
                 print('WARNING: all the links of ' + str(vdf_index[0]+vdf_index[1]*100) + ' during assignment period ' + period_index + ' are not qualified...')
                 continue 
@@ -501,6 +496,10 @@ if  __name__ == "__main__":
         output_df_daily = pd.concat([output_df_daily,all_calibration_period_vdf_daily_link_results],sort=False)
         para=[100*vdf_index[1]+vdf_index[0],vdf_index[0],vdf_index[1],'daily','--','--','--','--','--','--',all_calibration_period_vdf_daily_link_results.daily_alpha.mean(),all_calibration_period_vdf_daily_link_results.daily_beta.mean()]
         g_parameter_list.append(para)
+    
+    if len(g_parameter_list) ==0: 
+        print('WARNING: No available data')
+        exit() 
 
     # Step 6 Output results 
     print('Step 5: Output...\n')
